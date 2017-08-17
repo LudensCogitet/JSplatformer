@@ -1,0 +1,317 @@
+<canvas id="gameScreen"
+        width=800
+        height=600
+        style="display: block; margin: 0 auto;" />
+<script>
+"use strict";
+  let _gravity = 0.001;
+  let _terminal_velocity = 0.8;
+
+  function detectCollision(collider, collidee) {
+    let collisionData = {
+      x: {
+        inside: collider.lx >= collidee.lx && collider.rx <= collidee.rx,
+        left:   collider.rx > collidee.rx && collider.lx < collidee.rx,
+        right:  collider.lx < collidee.lx && collider.rx > collidee.lx
+      },
+      y: {
+        inside: collider.ty >= collidee.ty && collider.by <= collidee.by,
+        top:    collider.by > collidee.by && collider.ty < collidee.by,
+        bottom: collider.ty < collidee.ty && collider.by > collidee.ty
+      }
+    };
+
+    let x = collisionData.x;
+    let y = collisionData.y;
+
+    if(!(x.inside || x.left || x.right) || !(y.inside || y.top || y.bottom))
+      collisionData = false;
+
+    return collisionData;
+  }
+
+  class Game {
+    constructor(canvas) {
+      this.gameScreen = document.getElementById(canvas);
+      this.screenBuffer = this.gameScreen.getContext('2d');
+
+      this.screenRect = this.gameScreen.getBoundingClientRect();
+
+      console.log(this.screenRect);
+
+      this.objects = [];
+      this.subjects = [];
+      this.visible = [];
+
+      this.camera = { x: 40,
+                      y: 40,
+                      focusX: 100,
+                      focusY: 50,
+                      panningX: 0,
+                      panningY: 0}
+
+      this.mousePos = {x: 0, y: 0};
+
+      this.player = null;
+
+      this.lastDelta = 0;
+
+      this.loop = this.loop.bind(this);
+      this.start = this.start.bind(this);
+      this.draw = this.draw.bind(this);
+
+      this.gameScreen.addEventListener('mousemove',(event) => {
+        this.mousePos.x = (event.x - this.screenRect.left);
+        this.mousePos.y = (event.y - this.screenRect.top);
+
+        let remainder = this.mousePos.x % 50;
+        if(remainder)
+          this.mousePos.x -= remainder;
+
+        remainder = this.mousePos.y % 50;
+        if(remainder)
+          this.mousePos.y  -= remainder;
+      });
+
+      this.gameScreen.addEventListener('click', (event) => {
+        new Platform(this.mousePos.x + this.camera.x, this.mousePos.y + this.camera.y, 200, 50, 'gray', game);
+      });
+
+      window.addEventListener('keydown', (event) => {
+        console.log(event.key);
+        if(event.key === 'Enter') { this.player.gravityOn = this.player.gravityOn ? false : true }
+      });
+    }
+
+    get cameraRect() {
+      return {lx: this.camera.x,
+              ty: this.camera.y,
+              rx: this.camera.x + this.gameScreen.width,
+              by: this.camera.y + this.gameScreen.height};
+    }
+
+    adjustCamera(delta) {
+      let xDiff = ((this.player.x + this.player.width/2) - this.camera.x) - (this.gameScreen.width/2);
+      let yDiff = ((this.player.y + this.player.height/2) - this.camera.y) - (this.gameScreen.height/2);
+
+
+      if(this.camera.panningX === 0) {
+        if(xDiff > this.camera.focusX)  { this.camera.panningX = 1 }
+        if(xDiff < -this.camera.focusX) { this.camera.panningX = -1 }
+      }
+
+      if(this.camera.panningY === 0) {
+        if(yDiff > this.camera.focusY)  { this.camera.panningY = 1 }
+        if(yDiff < -this.camera.focusY) { this.camera.panningY = -1 }
+      }
+
+      if((this.camera.panningX > 0 && this.player.dx > 0) || (this.camera.panningX < 0 && this.player.dx < 0)) {
+        this.camera.x += this.player.dx * delta;
+      }
+      else { this.camera.panningX = 0 }
+
+      if((this.camera.panningY > 0 && this.player.dy > 0) || (this.camera.panningY < 0 && this.player.dy < 0)) {
+        this.camera.y += this.player.dy * delta;
+      }
+      else { this.camera.panningY = 0 }
+    }
+
+    start() {
+      window.requestAnimationFrame(this.loop);
+    }
+
+    loop(timestamp) {
+      let delta = timestamp - (this.lastDelta || timestamp);
+
+      this.adjustCamera(delta);
+
+      this.subjects.forEach(x => { x.act(delta) });
+
+      this.screenBuffer.fillStyle = 'black';
+      this.screenBuffer.fillRect(0,0,gameScreen.width,gameScreen.height);
+
+      this.screenBuffer.fillStyle = 'rgba(0,200,0,0.5)';
+      this.screenBuffer.fillRect(this.mousePos.x, this.mousePos.y, 200, 50);
+
+      this.visible.forEach(x => { this.draw(x) });
+
+      this.lastDelta = timestamp;
+      window.requestAnimationFrame(this.loop);
+    }
+
+    draw(object) {
+      if(!detectCollision(this.cameraRect, object.rect)) { return }
+
+      let adjustedX = object.x - this.camera.x;
+      let adjustedY = object.y - this.camera.y;
+
+      this.screenBuffer.fillStyle = object.color;
+      this.screenBuffer.fillRect(adjustedX, adjustedY, object.width, object.height);
+    }
+  }
+
+  class GameObject {
+    constructor(game) {
+      this.game = game;
+      this.game.objects.push(this);
+    }
+  }
+
+  class Visible extends GameObject {
+    constructor(x, y, width, height, color, game) {
+      super(game);
+      this.game.visible.push(this);
+      this.x = x;
+      this.y = y;
+      this.width = width;
+      this.height = height;
+      this.color = color;
+    }
+
+    draw(){
+      this.game.draw(this)
+    }
+
+    get rect() {
+      return {lx: this.x,
+              rx: this.x + this.width,
+              ty: this.y,
+              by: this.y + this.height};
+    }
+  }
+
+  class Guy extends Visible{
+    constructor(x, y, color, keys, game) {
+      super(x, y, Guy.size, Guy.size*2, color, game);
+      this.game.subjects.push(this);
+      this.game.player = this;
+      this.state = "ungrounded"      // "ungrounded", "grounded"
+
+      this.dx = 0;
+      this.dy = 0;
+
+      this.gravityOn = false;
+
+      this.color = color;
+      this.keys = keys;
+
+      this.keyMap = { up: false,
+                      down: false,
+                      left: false,
+                      right: false};
+
+      window.addEventListener('keydown', (event) =>{
+          if(event.key === this.keys.up)    { this.keyMap.up = true; }
+          if(event.key === this.keys.down)  { this.keyMap.down = true; }
+          if(event.key === this.keys.left)  { this.keyMap.left = true; }
+          if(event.key === this.keys.right) { this.keyMap.right = true; }
+      });
+
+      window.addEventListener('keyup', (event) =>{
+        if(event.key === this.keys.up)    { this.keyMap.up = false; }
+        if(event.key === this.keys.down)  { this.keyMap.down = false; }
+        if(event.key === this.keys.left)  { this.keyMap.left = false; }
+        if(event.key === this.keys.right) { this.keyMap.right = false; }
+      });
+    }
+
+    act(delta){
+      let didCollide = false;
+      if(this.gravityOn) this.y += 0.00001;
+      this.game.objects.forEach((object,i) => {
+        if( object === this) return;
+
+        let result = detectCollision(this.rect, object.rect);
+        if(result) {
+          didCollide = true;
+          if(result.y.bottom) {
+            this.state = "grounded";
+            this.y = object.y - this.height;
+            this.dy = 0;
+          }
+          if(result.y.top) {
+            this.dy = 0;
+            this.y = object.y + object.height;
+          }
+          if(result.x.left && !result.y.bottom) {
+            this.dx = 0;
+            this.x = object.x + object.width;
+          }
+          if(result.x.right && !result.y.bottom) {
+            this.dx = 0;
+            this.x = object.x - this.width;
+          }
+        }
+      });
+
+      if(!didCollide && this.state === "grounded") {
+        this.state = "ungrounded";
+      }
+
+      if(this.keyMap.up)    if(this.state === "grounded") this.jump();
+
+      if(this.keyMap.left)  {
+        let accel = this.dx > 0 ? Guy.acceleration * Guy.hardStopMultiplier : Guy.acceleration;
+        this.dx = this.dx > -Guy.maxSpeed ? this.dx - accel * delta : -Guy.maxSpeed;
+      }
+
+      if(this.keyMap.right) {
+        let accel = this.dx < 0 ? Guy.acceleration * Guy.hardStopMultiplier : Guy.acceleration;
+        this.dx = this.dx < Guy.maxSpeed ? this.dx + accel * delta : Guy.maxSpeed;
+      }
+
+      if(!this.keyMap.left && !this.keyMap.right && this.state === 'grounded') {
+        if(this.dx < 0) {
+          this.dx += Guy.decceleration * delta;
+          if(this.dx > 0) this.dx = 0;
+        }
+        if(this.dx > 0) {
+          this.dx -= Guy.decceleration * delta;
+          if(this.dx < 0) this.dx = 0;
+        }
+      }
+
+      this.x += this.dx * delta;
+
+      if(this.keyMap.down) this.state = "grounded";
+
+      if(this.state !== "grounded" && this.gravityOn) {
+        this.dy = this.dy < _terminal_velocity ? this.dy += _gravity * delta : _terminal_velocity;
+        this.y += this.dy * delta;
+      }
+    }
+
+    jump() {
+      this.dy = -Guy.jumpForce;
+      this.state = "ungrounded";
+    }
+  }
+  Guy.size = 20;
+  Guy.acceleration = 0.001;
+  Guy.decceleration = 0.0015;
+  Guy.hardStopMultiplier = 3.5;
+  Guy.maxSpeed = 0.4;
+  Guy.jumpForce = 0.4;
+
+  class Platform extends Visible {
+    constructor(x, y, width, height, color, game) {
+      super(x, y, width, height, color, game);
+      this.solid = true;
+    }
+  }
+
+let game = new Game('gameScreen');
+
+let myGuy = new Guy(gameScreen.width/2, gameScreen.height/2,'blue',
+                    {up: 'ArrowUp',
+                    down: 'ArrowDown',
+                    left: 'ArrowLeft',
+                    right: 'ArrowRight',
+                    cam_up: 'w',
+                    cam_down: 's',
+                    cam_left: 'a',
+                    cam_right: 'd'}, game);
+
+game.start();
+
+</script>
