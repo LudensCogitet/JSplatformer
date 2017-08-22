@@ -11,13 +11,13 @@
     let collisionData = {
       x: {
         inside: collider.lx >= collidee.lx && collider.rx <= collidee.rx,
-        left:   collider.rx > collidee.rx && collider.lx < collidee.rx,
-        right:  collider.lx < collidee.lx && collider.rx > collidee.lx
+        left:   collider.lx <= collidee.rx && collider.rx >= collidee.rx,
+        right:  collider.rx >= collidee.lx && collider.lx <= collidee.lx
       },
       y: {
         inside: collider.ty >= collidee.ty && collider.by <= collidee.by,
-        top:    collider.by > collidee.by && collider.ty < collidee.by,
-        bottom: collider.ty < collidee.ty && collider.by > collidee.ty
+        top:    collider.ty <= collidee.by && collider.by >= collidee.by,
+        bottom: collider.by >= collidee.ty && collider.ty <= collidee.ty
       }
     };
 
@@ -37,50 +37,58 @@
 
       this.screenRect = this.gameScreen.getBoundingClientRect();
 
-      console.log(this.screenRect);
-
       this.objects = [];
       this.subjects = [];
       this.visible = [];
 
-      this.camera = { x: 40,
-                      y: 40,
+      this.mouseEventPos = {x: 0, y: 0};
+
+      this.camera = { x: 0,
+                      y: 0,
                       focusX: 100,
                       focusY: 50,
                       panningX: 0,
                       panningY: 0}
 
-      this.mousePos = {x: 0, y: 0};
-
       this.player = null;
 
       this.lastDelta = 0;
+
+      this.shifted = false;
 
       this.loop = this.loop.bind(this);
       this.start = this.start.bind(this);
       this.draw = this.draw.bind(this);
 
       this.gameScreen.addEventListener('mousemove',(event) => {
-        this.mousePos.x = (event.x - this.screenRect.left);
-        this.mousePos.y = (event.y - this.screenRect.top);
-
-        let remainder = this.mousePos.x % 50;
-        if(remainder)
-          this.mousePos.x -= remainder;
-
-        remainder = this.mousePos.y % 50;
-        if(remainder)
-          this.mousePos.y  -= remainder;
+          this.mouseEventPos.x = event.x;
+          this.mouseEventPos.y = event.y;
       });
 
       this.gameScreen.addEventListener('click', (event) => {
-        new Platform(this.mousePos.x + this.camera.x, this.mousePos.y + this.camera.y, 200, 50, 'gray', game);
+        let width = this.shifted ? 51 : 201;
+        let height = this.shifted ? 201 : 51;
+        new Platform(this.mousePos.x, this.mousePos.y, width, height, 'gray', game);
       });
 
       window.addEventListener('keydown', (event) => {
-        console.log(event.key);
         if(event.key === 'Enter') { this.player.gravityOn = this.player.gravityOn ? false : true }
+        if(event.key === 'Shift') { this.shifted = true }
       });
+
+      window.addEventListener('keyup', (event) => {
+        if(event.key === 'Shift') { this.shifted = false }
+      });
+    }
+
+    get mousePos() {
+      let x = (this.mouseEventPos.x - this.screenRect.left) + this.camera.x;
+      let y = (this.mouseEventPos.y - this.screenRect.top) + this.camera.y;
+      x -= x % 50;
+      y -= y % 50;
+
+      return {x: x,
+              y: y};
     }
 
     get cameraRect() {
@@ -131,7 +139,11 @@
       this.screenBuffer.fillRect(0,0,gameScreen.width,gameScreen.height);
 
       this.screenBuffer.fillStyle = 'rgba(0,200,0,0.5)';
-      this.screenBuffer.fillRect(this.mousePos.x, this.mousePos.y, 200, 50);
+
+      let width = this.shifted ? 51 : 201;
+      let height = this.shifted ? 201 : 51;
+
+      this.screenBuffer.fillRect(this.mousePos.x - this.camera.x, this.mousePos.y - this.camera.y, width, height);
 
       this.visible.forEach(x => { this.draw(x) });
 
@@ -215,39 +227,7 @@
       });
     }
 
-    act(delta){
-      let didCollide = false;
-      if(this.gravityOn) this.y += 0.00001;
-      this.game.objects.forEach((object,i) => {
-        if( object === this) return;
-
-        let result = detectCollision(this.rect, object.rect);
-        if(result) {
-          didCollide = true;
-          if(result.y.bottom) {
-            this.state = "grounded";
-            this.y = object.y - this.height;
-            this.dy = 0;
-          }
-          if(result.y.top) {
-            this.dy = 0;
-            this.y = object.y + object.height;
-          }
-          if(result.x.left && !result.y.bottom) {
-            this.dx = 0;
-            this.x = object.x + object.width;
-          }
-          if(result.x.right && !result.y.bottom) {
-            this.dx = 0;
-            this.x = object.x - this.width;
-          }
-        }
-      });
-
-      if(!didCollide && this.state === "grounded") {
-        this.state = "ungrounded";
-      }
-
+    _input(delta) {
       if(this.keyMap.up)    if(this.state === "grounded") this.jump();
 
       if(this.keyMap.left)  {
@@ -270,15 +250,51 @@
           if(this.dx < 0) this.dx = 0;
         }
       }
+      if(this.keyMap.down) this.state = "grounded";
+    }
+
+    _collisions() {
+      let didCollide = false;
+
+      this.game.objects.forEach((object,i) => {
+        if( object === this) return;
+        let result = detectCollision(this.rect, object.rect);
+
+        if(result) {
+          didCollide = true;
+          if(result.y.top) { this.y += (this.rect.ty - object.rect.by) }
+          if(result.y.bottom) {
+            this.y -= (this.rect.by - object.rect.ty);
+            this.getGrounded();
+          }
+         if((result.x.left || result.x.right)&& !result.y.bottom) {
+           this.x += this.dx;
+           this.dx = 0;
+         }
+        }
+      });
+
+      if(!didCollide && this.state === "grounded") {
+        this.state = "ungrounded";
+      }
+    }
+
+    act(delta){
+      this._input(delta);
 
       this.x += this.dx * delta;
-
-      if(this.keyMap.down) this.state = "grounded";
+      this.y += this.dy * delta;
 
       if(this.state !== "grounded" && this.gravityOn) {
         this.dy = this.dy < _terminal_velocity ? this.dy += _gravity * delta : _terminal_velocity;
-        this.y += this.dy * delta;
       }
+
+      this._collisions();
+    }
+
+    getGrounded() {
+      this.state = 'grounded';
+      this.dy = Guy.groundedFall;
     }
 
     jump() {
@@ -292,6 +308,7 @@
   Guy.hardStopMultiplier = 3.5;
   Guy.maxSpeed = 0.4;
   Guy.jumpForce = 0.4;
+  Guy.groundedFall = 0.00001;
 
   class Platform extends Visible {
     constructor(x, y, width, height, color, game) {
