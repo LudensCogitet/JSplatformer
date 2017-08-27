@@ -11,23 +11,30 @@
     let collisionData = {
       x: {
         inside: collider.lx >= collidee.lx && collider.rx <= collidee.rx,
-        left:   collider.lx <= collidee.rx && collider.rx >= collidee.rx,
-        right:  collider.rx >= collidee.lx && collider.lx <= collidee.lx
+        left:   collider.lx < collidee.rx && collider.rx > collidee.rx,
+        right:  collider.rx > collidee.lx && collider.lx < collidee.lx
       },
       y: {
         inside: collider.ty >= collidee.ty && collider.by <= collidee.by,
-        top:    collider.ty <= collidee.by && collider.by >= collidee.by,
-        bottom: collider.by >= collidee.ty && collider.ty <= collidee.ty
+        top:    collider.ty < collidee.by && collider.by > collidee.by,
+        bottom: collider.by > collidee.ty && collider.ty < collidee.ty
       }
     };
 
     let x = collisionData.x;
     let y = collisionData.y;
 
-    if(!(x.inside || x.left || x.right) || !(y.inside || y.top || y.bottom))
+    if(!(x.left || x.right || x.inside) || !(y.top || y.bottom || y.inside))
       collisionData = false;
 
     return collisionData;
+  }
+
+  function towardCenter(collider, collidee) {
+    let x = Math.abs(collider.cx - collidee.cx) >= Math.abs(Math.abs(collider.cx + collider.dx) - collidee.cx);
+    let y = Math.abs(collider.cy - collidee.cy) >= Math.abs(Math.abs(collider.cy + collider.dy) - collidee.cy);
+
+    return {x, y};
   }
 
   class Game {
@@ -56,6 +63,10 @@
 
       this.shifted = false;
 
+      this.mousePosUnit = 50;
+      this.platformWidth = (this.mousePosUnit * 4) + 1;
+      this.platformHeight = this.mousePosUnit + 1;
+
       this.loop = this.loop.bind(this);
       this.start = this.start.bind(this);
       this.draw = this.draw.bind(this);
@@ -66,26 +77,31 @@
       });
 
       this.gameScreen.addEventListener('click', (event) => {
-        let width = this.shifted ? 51 : 201;
-        let height = this.shifted ? 201 : 51;
-        new Platform(this.mousePos.x, this.mousePos.y, width, height, 'gray', game);
+        new Platform(this.mousePos.x, this.mousePos.y, this.platformWidth, this.platformHeight, 'gray', game);
       });
 
       window.addEventListener('keydown', (event) => {
         if(event.key === 'Enter') { this.player.gravityOn = this.player.gravityOn ? false : true }
-        if(event.key === 'Shift') { this.shifted = true }
+        if(event.key === 'Shift') { let temp = this.platformWidth; this.platformWidth = this.platformHeight; this.platformHeight = temp; }
       });
 
-      window.addEventListener('keyup', (event) => {
-        if(event.key === 'Shift') { this.shifted = false }
+      window.addEventListener('wheel', (event) => {
+        if(this.platformWidth > this.platformHeight) {
+          if(event.deltaY > 0)  { this.platformWidth += this.mousePosUnit }
+          else                  { this.platformWidth -= this.mousePosUnit }
+        }
+        else {
+          if(event.deltaY > 0)                                { this.platformWidth += this.mousePosUnit }
+          else if(this.platformWidth > this.mousePosUnit +1)                { this.platformWidth -= this.mousePosUnit }
+        }
       });
     }
 
     get mousePos() {
       let x = (this.mouseEventPos.x - this.screenRect.left) + this.camera.x;
       let y = (this.mouseEventPos.y - this.screenRect.top) + this.camera.y;
-      x -= x % 50;
-      y -= y % 50;
+      x -= x % this.mousePosUnit;
+      y -= y % this.mousePosUnit;
 
       return {x: x,
               y: y};
@@ -140,10 +156,7 @@
 
       this.screenBuffer.fillStyle = 'rgba(0,200,0,0.5)';
 
-      let width = this.shifted ? 51 : 201;
-      let height = this.shifted ? 201 : 51;
-
-      this.screenBuffer.fillRect(this.mousePos.x - this.camera.x, this.mousePos.y - this.camera.y, width, height);
+      this.screenBuffer.fillRect(this.mousePos.x - this.camera.x, this.mousePos.y - this.camera.y, this.platformWidth, this.platformHeight);
 
       this.visible.forEach(x => { this.draw(x) });
 
@@ -188,7 +201,11 @@
       return {lx: this.x,
               rx: this.x + this.width,
               ty: this.y,
-              by: this.y + this.height};
+              by: this.y + this.height,
+              cx: this.x + this.width/2,
+              cy: this.y + this.height/2,
+              dx: this.dx || 0,
+              dy: this.dy || 0};
     }
   }
 
@@ -227,6 +244,12 @@
       });
     }
 
+    get downRect() {
+      let rect = this.rect;
+      rect.by += Guy.groundedFall;
+      return rect;
+    }
+
     _input(delta) {
       if(this.keyMap.up)    if(this.state === "grounded") this.jump();
 
@@ -255,27 +278,44 @@
 
     _collisions() {
       let didCollide = false;
-
+      let shouldFall = true;
       this.game.objects.forEach((object,i) => {
-        if( object === this) return;
-        let result = detectCollision(this.rect, object.rect);
+        if(object === this) return;
+
+        if(this.state === 'grounded') {
+          let result = detectCollision(this.downRect, object.rect);
+          if(result && result.x.inside) {
+            shouldFall = false;
+            return;
+          }
+        }
+
+        let collider = this.rect;
+        let collidee = object.rect;
+        let result = detectCollision(collider, collidee);
 
         if(result) {
           didCollide = true;
-          if(result.y.top) { this.y += (this.rect.ty - object.rect.by) }
-          if(result.y.bottom) {
+          let inward = towardCenter(collider, collidee);
+          if(result.y.bottom && inward.y) {
             this.y -= (this.rect.by - object.rect.ty);
             this.getGrounded();
+            shouldFall = false;
+          } else if(result.y.top && inward.y) {
+            this.y += (object.rect.by - this.rect.ty);
+            this.dy = 0;
+          } else if(result.x.left && inward.x) {
+            this.x += (object.rect.rx - this.rect.lx);
+            this.dx = 0;
+          } else if(result.x.right && inward.x) {
+            this.x -= (this.rect.rx - object.rect.lx);
+            this.dx = 0;
           }
-         if((result.x.left || result.x.right)&& !result.y.bottom) {
-           this.x += this.dx;
-           this.dx = 0;
-         }
         }
       });
 
-      if(!didCollide && this.state === "grounded") {
-        this.state = "ungrounded";
+      if(shouldFall) {
+        this.state = 'ungrounded';
       }
     }
 
