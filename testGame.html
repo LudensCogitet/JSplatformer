@@ -7,34 +7,42 @@
   let _gravity = 0.001;
   let _terminal_velocity = 0.8;
 
-  function detectCollision(collider, collidee) {
+  function getCollisionInfo(collider, collidee) {
     let collisionData = {
       x: {
-        inside: collider.lx >= collidee.lx && collider.rx <= collidee.rx,
+        inside: collider.lx > collidee.lx && collider.rx < collidee.rx,
         left:   collider.lx < collidee.rx && collider.rx > collidee.rx,
         right:  collider.rx > collidee.lx && collider.lx < collidee.lx
       },
       y: {
-        inside: collider.ty >= collidee.ty && collider.by <= collidee.by,
+        inside: collider.ty > collidee.ty && collider.by < collidee.by,
         top:    collider.ty < collidee.by && collider.by > collidee.by,
         bottom: collider.by > collidee.ty && collider.ty < collidee.ty
       }
     };
 
-    let x = collisionData.x;
-    let y = collisionData.y;
-
-    if(!(x.left || x.right || x.inside) || !(y.top || y.bottom || y.inside))
-      collisionData = false;
-
     return collisionData;
   }
 
-  function towardCenter(collider, collidee) {
-    let x = Math.abs(collider.cx - collidee.cx) >= Math.abs(Math.abs(collider.cx + collider.dx) - collidee.cx);
-    let y = Math.abs(collider.cy - collidee.cy) >= Math.abs(Math.abs(collider.cy + collider.dy) - collidee.cy);
+  function didCollide(collider, collidee) {
+    return !(collider.lx > collidee.rx ||
+             collider.rx < collidee.lx ||
+             collider.ty > collidee.by ||
+             collider.by < collidee.ty);
+  }
 
-    return {x, y};
+  function getSmallestDiff(collider, collidee, cInfo) {
+    let botDiff = collider.by - collidee.ty;
+    let topDiff = collidee.by - collider.ty;
+    let leftDiff = collidee.rx - collider.lx;
+    let rightDiff = collider.rx - collidee.lx;
+
+    let smallestDiff = Math.min(botDiff, topDiff, leftDiff, rightDiff);
+
+    if(smallestDiff === botDiff) return 'bottom';
+    if(smallestDiff === topDiff) return 'top';
+    if(smallestDiff === leftDiff) return 'left';
+    if(smallestDiff === rightDiff) return 'right';
   }
 
   class Game {
@@ -63,8 +71,8 @@
 
       this.shifted = false;
 
-      this.mousePosUnit = 50;
-      this.platformWidth = (this.mousePosUnit * 4) + 1;
+      this.mousePosUnit = 15;
+      this.platformWidth = (this.mousePosUnit * 8) + 1;
       this.platformHeight = this.mousePosUnit + 1;
 
       this.loop = this.loop.bind(this);
@@ -165,7 +173,7 @@
     }
 
     draw(object) {
-      if(!detectCollision(this.cameraRect, object.rect)) { return }
+      if(!didCollide(this.cameraRect, object.rect)) { return }
 
       let adjustedX = object.x - this.camera.x;
       let adjustedY = object.y - this.camera.y;
@@ -250,6 +258,13 @@
       return rect;
     }
 
+    get backupRect() {
+      let rect = this.rect;
+      rect.x -= rect.dx;
+      rect.y -= rect.dy;
+      return rect;
+    }
+
     _input(delta) {
       if(this.keyMap.up)    if(this.state === "grounded") this.jump();
 
@@ -277,41 +292,36 @@
     }
 
     _collisions() {
-      let didCollide = false;
       let shouldFall = true;
       this.game.objects.forEach((object,i) => {
         if(object === this) return;
 
-        if(this.state === 'grounded') {
-          let result = detectCollision(this.downRect, object.rect);
-          if(result && result.x.inside) {
-            shouldFall = false;
-            return;
-          }
-        }
-
         let collider = this.rect;
         let collidee = object.rect;
-        let result = detectCollision(collider, collidee);
 
-        if(result) {
-          didCollide = true;
-          let inward = towardCenter(collider, collidee);
-          if(result.y.bottom && inward.y) {
-            this.y -= (this.rect.by - object.rect.ty);
-            this.getGrounded();
-            shouldFall = false;
-          } else if(result.y.top && inward.y) {
-            this.y += (object.rect.by - this.rect.ty);
-            this.dy = 0;
-          } else if(result.x.left && inward.x) {
-            this.x += (object.rect.rx - this.rect.lx);
-            this.dx = 0;
-          } else if(result.x.right && inward.x) {
-            this.x -= (this.rect.rx - object.rect.lx);
-            this.dx = 0;
-          }
+        if(!didCollide(collider, collidee))
+          return;
+
+        let result = getCollisionInfo(collider, collidee);
+        let smallestDiff = getSmallestDiff(this.backupRect, object.rect, result);
+
+        if(result.y.bottom && (result.x.inside || smallestDiff === 'bottom')) {
+          this.y -= (this.rect.by - object.rect.ty);
+          this.getGrounded();
+          shouldFall = false;
+        } else if(result.y.top && (result.x.inside || smallestDiff == 'top')) {
+          this.y += (object.rect.by - this.rect.ty);
+          this.dy = 0;
         }
+
+        if(result.x.left && (result.y.inside || smallestDiff === 'left')) {
+          this.x += (object.rect.rx - this.rect.lx);
+          this.dx = 0;
+        } else if(result.x.right && (result.y.inside || smallestDiff === 'right')) {
+          this.x -= (this.rect.rx - object.rect.lx);
+          this.dx = 0;
+        }
+
       });
 
       if(shouldFall) {
@@ -342,12 +352,12 @@
       this.state = "ungrounded";
     }
   }
-  Guy.size = 20;
+  Guy.size = 10;
   Guy.acceleration = 0.001;
   Guy.decceleration = 0.0015;
   Guy.hardStopMultiplier = 3.5;
   Guy.maxSpeed = 0.4;
-  Guy.jumpForce = 0.4;
+  Guy.jumpForce = 0.6;//0.4;
   Guy.groundedFall = 0.00001;
 
   class Platform extends Visible {
