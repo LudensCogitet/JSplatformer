@@ -1,7 +1,8 @@
 <canvas id="gameScreen"
         width=800
         height=600
-        style="display: block; margin: 0 auto;" />
+        style="display: block; margin: 0 auto;"></canvas>
+<textarea id="levelData" placeholder="Level Data" cols=75 rows=10>[{"objectType":"platform","x":375,"y":330,"width":76,"height":16},{"objectType":"platform","x":360,"y":270,"width":16,"height":76},{"objectType":"platform","x":360,"y":255,"width":166,"height":16},{"objectType":"platform","x":510,"y":270,"width":16,"height":256},{"objectType":"platform","x":435,"y":345,"width":16,"height":256},{"objectType":"platform","x":510,"y":525,"width":256,"height":16},{"objectType":"platform","x":300,"y":675,"width":226,"height":16},{"objectType":"platform","x":195,"y":570,"width":61,"height":16},{"objectType":"platform","x":30,"y":675,"width":61,"height":16},{"objectType":"platform","x":-120,"y":570,"width":61,"height":16},{"objectType":"platform","x":-240,"y":450,"width":61,"height":16}]</textarea>
 <script>
 "use strict";
   let _gravity = 0.001;
@@ -49,12 +50,15 @@
     constructor(canvas) {
       this.gameScreen = document.getElementById(canvas);
       this.screenBuffer = this.gameScreen.getContext('2d');
+      this.dataIO = document.getElementById('levelData');
 
       this.screenRect = this.gameScreen.getBoundingClientRect();
 
       this.objects = [];
       this.subjects = [];
       this.visible = [];
+
+      this.levelData = [];
 
       this.mouseEventPos = {x: 0, y: 0};
 
@@ -63,7 +67,7 @@
                       focusX: 100,
                       focusY: 50,
                       panningX: 0,
-                      panningY: 0}
+                      panningY: 0};
 
       this.player = null;
 
@@ -86,11 +90,14 @@
 
       this.gameScreen.addEventListener('click', (event) => {
         new Platform(this.mousePos.x, this.mousePos.y, this.platformWidth, this.platformHeight, 'gray', game);
+        this.levelData.push({objectType: 'platform', x: this.mousePos.x, y: this.mousePos.y, width: this.platformWidth, height: this.platformHeight});
+        this.dataIO.value = JSON.stringify(this.levelData);
       });
 
       window.addEventListener('keydown', (event) => {
-        if(event.key === 'Enter') { this.player.gravityOn = this.player.gravityOn ? false : true }
+        if(event.key === 'Enter') { this.player.state = this.player.state === 'float' ? 'ungrounded' : 'float' }
         if(event.key === 'Shift') { let temp = this.platformWidth; this.platformWidth = this.platformHeight; this.platformHeight = temp; }
+        if(event.key === 'Escape') { this.load() }
       });
 
       window.addEventListener('wheel', (event) => {
@@ -146,6 +153,34 @@
         this.camera.y += this.player.dy * delta;
       }
       else { this.camera.panningY = 0 }
+    }
+
+    load() {
+      this.objects = [];
+      this.subjects = [];
+      this.visible = [];
+      this.levelData = this.dataIO.value? JSON.parse(this.dataIO.value) : [];
+      this.levelData.forEach(datum => {
+        console.log(datum);
+        if(datum.objectType === 'platform') {
+          new Platform(datum.x,datum.y,datum.width,datum.height,'gray',this);
+        }
+      });
+
+      this.camera = { x: 0,
+                      y: 0,
+                      focusX: 100,
+                      focusY: 50,
+                      panningX: 0,
+                      panningY: 0};
+
+      new Guy(gameScreen.width/2, gameScreen.height/2,'blue',
+                          {up: 'ArrowUp',
+                          down: 'ArrowDown',
+                          left: 'ArrowLeft',
+                          right: 'ArrowRight'}, game);
+
+                          console.log(this.dataIO.value);
     }
 
     start() {
@@ -223,12 +258,10 @@
       super(x, y, Guy.size, Guy.size*2, color, game);
       this.game.subjects.push(this);
       this.game.player = this;
-      this.state = "ungrounded"      // "ungrounded", "grounded"
+      this.state = "float";      // "ungrounded" (falling), "grounded" (on a surface), "float" (for level building)
 
       this.dx = 0;
       this.dy = 0;
-
-      this.gravityOn = false;
 
       this.color = color;
       this.keys = keys;
@@ -267,6 +300,17 @@
     }
 
     _input(delta) {
+      if(this.state === 'float') {
+        if(this.keyMap.up)    this.dy = -Guy.maxSpeed;
+        if(this.keyMap.down)  this.dy = Guy.maxSpeed;
+        if(this.keyMap.left)  this.dx = -Guy.maxSpeed;
+        if(this.keyMap.right) this.dx = Guy.maxSpeed;
+
+        if(!this.keyMap.up && !this.keyMap.down)    this.dy = 0;
+        if(!this.keyMap.left && !this.keyMap.right)  this.dx = 0;
+        return;
+      }
+
       if(this.keyMap.up)    if(this.state === "grounded") this.jump();
 
       if(this.keyMap.left)  {
@@ -293,7 +337,7 @@
     }
 
     _collisions() {
-      let shouldFall = true;
+      let shouldFall = this.state !== 'float';
       this.game.objects.forEach((object,i) => {
         if(object === this) return;
 
@@ -336,7 +380,7 @@
       this.x += this.dx * delta;
       this.y += this.dy * delta;
 
-      if(this.state !== "grounded" && this.gravityOn) {
+      if(this.state === "ungrounded") {
         this.dy = this.dy < _terminal_velocity ? this.dy += _gravity * delta : _terminal_velocity;
       }
 
@@ -357,8 +401,8 @@
   Guy.acceleration = 0.001;
   Guy.decceleration = 0.0015;
   Guy.hardStopMultiplier = 3.5;
-  Guy.maxSpeed = 0.4;
-  Guy.jumpForce = 0.6;//0.4;
+  Guy.maxSpeed = 0.3;
+  Guy.jumpForce = 0.5;
   Guy.groundedFall = 0.00001;
 
   class Platform extends Visible {
@@ -370,16 +414,7 @@
 
 let game = new Game('gameScreen');
 
-let myGuy = new Guy(gameScreen.width/2, gameScreen.height/2,'blue',
-                    {up: 'ArrowUp',
-                    down: 'ArrowDown',
-                    left: 'ArrowLeft',
-                    right: 'ArrowRight',
-                    cam_up: 'w',
-                    cam_down: 's',
-                    cam_left: 'a',
-                    cam_right: 'd'}, game);
-
+game.load();
 game.start();
 
 </script>
